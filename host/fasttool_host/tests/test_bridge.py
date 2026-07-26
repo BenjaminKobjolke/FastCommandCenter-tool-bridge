@@ -67,3 +67,52 @@ def test_load_with_no_manifests_returns_empty_list(tmp_path: Path) -> None:
     actions = ToolBridge().load([empty_dir])
 
     assert actions == []
+
+
+def test_manifests_exposes_every_loaded_manifest(tmp_path: Path) -> None:
+    tool_a = tmp_path / "a"
+    write_manifest(tool_a, VALID)
+    tool_b = tmp_path / "b"
+    write_manifest(tool_b, MULTI_ACTION)
+    bridge = ToolBridge()
+
+    bridge.load([tool_a, tool_b])
+
+    ids = {m.id for m in bridge.manifests}
+    names = {m.name for m in bridge.manifests}
+    assert ids == {"fastkeyboardmouse", "fasttextsuggester"}
+    assert names == {"Fast Keyboard Mouse", "Fast Text Suggester"}
+
+
+def test_manifests_is_empty_before_load(tmp_path: Path) -> None:
+    bridge = ToolBridge()
+
+    assert bridge.manifests == []
+
+
+def test_describe_settings_with_unknown_tool_id_is_a_no_op(tmp_path: Path) -> None:
+    bridge = ToolBridge()
+    bridge.load([])
+
+    bridge.describe_settings("no-such-tool")  # must not raise
+
+
+def test_set_setting_with_unknown_tool_id_is_a_no_op(tmp_path: Path) -> None:
+    bridge = ToolBridge()
+    bridge.load([])
+
+    bridge.set_setting("no-such-tool", "ToggleKey", "alt+q")  # must not raise
+
+
+def test_settings_received_signal_exists_and_is_connectable(tmp_path: Path) -> None:
+    bridge = ToolBridge()
+
+    received = []
+    bridge.settings_received.connect(received.append)  # must not raise
+
+
+def test_shutdown_with_no_launched_processes_stops_the_settings_receiver(tmp_path: Path) -> None:
+    bridge = ToolBridge()
+    bridge.load([])
+
+    bridge.shutdown()  # must not raise; also tears down the receiver window

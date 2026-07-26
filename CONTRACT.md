@@ -139,9 +139,130 @@ not raised** — `fasttool_host.manifest.discover_manifests` swallows
 `ManifestError` per folder. One bad or half-written tool folder must not take
 down the whole host on startup.
 
+## Settings protocol (v2)
+
+Lets the host read and change a tool's **own** settings — its internal
+keyboard shortcuts, tunables, colors, flags — without ever touching the
+tool's config file itself. The tool remains the sole owner of how its
+settings are persisted and applied; the host only ever sees typed values over
+IPC. This is deliberately more than "read the tool's ini file from the host
+side": the host cannot know how a given tool stores its config (ini, JSON,
+registry, ...), so it never tries to.
+
+### Why this needed a reply channel
+
+Action-fire (v1) is one-way and stays that way. Settings needs the tool to
+report *back* — its schema and current values, and later a fresh snapshot
+after applying a change — which v1 explicitly deferred ("If a tool ever needs
+to report status back, that is a v2 concern — out of scope here"). This is
+that v2.
+
+### The reply window: `FastToolIPC::host`
+
+Symmetric with a tool's own `FastToolIPC::<tool-id>` window (see
+"Discovery" above): the host creates one hidden, ordinary top-level window
+titled exactly `FastToolIPC::host`. A tool sends its settings snapshot to the
+host by resolving this window with `FindWindow(NULL, "FastToolIPC::host")`
+and sending it a `WM_COPYDATA` message, the same primitive and direction the
+host already uses to reach a tool — just reversed. Still fire-and-forget in
+each direction; there is no synchronous request/response, only two
+independent one-way sends.
+
+### Envelope
+
+`dwData = 2` marks a settings message (as opposed to `dwData = 1` for an
+action-fire message). `lpData` holds two NUL-terminated UTF-8 strings back to
+back — a `kind` tag, then a JSON body:
+
+```
+<kind>\0<json>\0
+```
+
+`cbData` is the total byte length of both parts, including both trailing NUL
+bytes.
+
+### Message kinds
+
+| Kind | Direction | Body |
+|---|---|---|
+| `describe` | host → tool | `{}` — "send me your current settings" |
+| `snapshot` | tool → host | `{"tool_id": "<id>", "settings": [ {...} ]}` — full current state |
+| `set` | host → tool | `{"id": "<setting-id>", "value": <typed>}` |
+
+**`describe`**: sent to a tool the same way an action is (find-or-launch via
+`ipc_title`, see "Discovery"). Body is always `{}`.
+
+**`snapshot`**: a tool sends this in response to `describe`, and again after
+applying a `set` — so it doubles as both the answer to "what are your
+settings?" and the acknowledgment/refresh after a change. There is no
+separate ack message. `settings` is a list of setting objects (see "Setting
+types" below); `tool_id` must match the sending tool's manifest `id`, so the
+host can route the snapshot back to the right tool. Still fire-and-forget: if
+a `set` never produces a `snapshot` in a reasonable time, the host degrades
+to "the tool didn't respond" — it does not block waiting.
+
+**`set`**: `id` is one of the setting ids the tool advertised in its last
+`snapshot`. `value` is typed per that setting's `type` (below). The tool
+persists it, reloads whatever internal state depends on it (a single hotkey
+re-registration, a full restart — the tool's own call, invisible to the
+host), and sends a fresh `snapshot` reflecting the applied state.
+
+An unrecognized `kind`, or a `set` for an unknown `id`, is silently ignored —
+same forward-compat rule as an unknown action id.
+
+### Setting types
+
+Every setting in a `snapshot`'s list has at least `id`, `label`, `type`,
+`value`. All values are JSON-native so the host never has to understand a
+tool's own native format (e.g. AutoHotkey hotkey syntax):
+
+| `type` | `value` | Extra fields |
+|---|---|---|
+| `shortcut` | neutral chord string, e.g. `"alt+q"`, or a bare key `"q"` | — |
+| `int` | integer | `min`, `max`, `step` (all optional) |
+| `bool` | `true` / `false` | — |
+| `enum` | string | `choices`: list of strings |
+| `color` | `"#rrggbb"` | — |
+
+`shortcut` reuses the **same neutral chord format** already defined above
+under "Yielding hotkeys while a tool is active" (lowercase, `+`-joined,
+`win` for the Windows/Meta key). A tool's client shim is responsible for
+translating neutral ↔ its own native format (e.g. AutoHotkey `!q` for
+`alt+q`) in both directions — the host only ever sends and receives neutral
+chords.
+
+Example `snapshot` body:
+
+```json
+{
+  "tool_id": "fastkeyboardmouse",
+  "settings": [
+    {"id": "ToggleKey", "label": "Toggle mouse mode", "type": "shortcut", "value": "alt+q"},
+    {"id": "BaseSpeed", "label": "Cursor speed", "type": "int", "value": 20, "min": 1, "max": 100, "step": 1},
+    {"id": "DarkMode", "label": "Dark mode", "type": "bool", "value": true},
+    {"id": "SpeedModifier", "label": "Speed boost key", "type": "enum", "value": "Shift", "choices": ["Shift", "Ctrl", "Alt"]},
+    {"id": "IndicatorColor", "label": "Cursor indicator color", "type": "color", "value": "#00ff00"}
+  ]
+}
+```
+
+### Graceful degradation
+
+A tool with no settings support (an older v1-only shim, or one that simply
+declares no settings) never sends a `snapshot` back. The host waits briefly,
+then shows "no editable settings" — no crash, no hang, and action-fire
+continues to work exactly as before (v1 is untouched by any of this). An
+older tool receiving a `describe` or `set` message doesn't need to recognize
+`dwData = 2` at all to degrade safely: even a receiver that ignores `dwData`
+and blindly parses `lpData` as an action id would just look up `"describe"`
+or `"set"` in its action map, find nothing, and silently ignore it per the
+existing unknown-action-id rule.
+
 ## Versioning
 
 `dwData` carries a protocol version so a future breaking wire change can be
-detected. This version of the contract is **1**. Receivers should ignore
-messages with an unrecognized version rather than crash (forward-compat is
-more important than strict validation for a fire-and-forget hotkey action).
+detected. Action-fire is version **1**, settings is version **2** (see
+above) — both are live simultaneously, not a linear upgrade. Receivers should
+ignore messages with an unrecognized `dwData` rather than crash
+(forward-compat is more important than strict validation for a
+fire-and-forget message).

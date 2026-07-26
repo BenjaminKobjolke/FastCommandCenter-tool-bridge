@@ -61,16 +61,22 @@ class ToolBridge:
             for action in manifest.actions
         ]
 
-    def fire(self, tool_id: str, action_id: str) -> None:
+    def fire(self, tool_id: str, action_id: str, yield_chords: list[str] | None = None) -> None:
+        """Send ``action_id`` to the tool. ``yield_chords`` (neutral format,
+        e.g. ["alt+q"]) is the set of chords the host currently has registered
+        globally -- passed through to the tool so it can stop swallowing them
+        while active (see CONTRACT.md's "yield while active" section)."""
         manifest = self._manifests.get(tool_id)
         if manifest is None:
             return
         hwnd = find_window(manifest.ipc_title)
         if hwnd is not None:
-            send_action(hwnd, action_id)
+            send_action(hwnd, action_id, yield_chords=yield_chords)
             return
         self._launch(manifest)
-        self._poll_for_window(manifest, action_id, time.monotonic() + _LAUNCH_TIMEOUT_S)
+        self._poll_for_window(
+            manifest, action_id, time.monotonic() + _LAUNCH_TIMEOUT_S, yield_chords
+        )
 
     def _launch(self, manifest: ToolManifest) -> None:
         existing = self._processes.get(manifest.id)
@@ -86,16 +92,22 @@ class ToolBridge:
         process.start(str(manifest.exe_path), list(manifest.launch.args))
         self._processes[manifest.id] = process
 
-    def _poll_for_window(self, manifest: ToolManifest, action_id: str, deadline: float) -> None:
+    def _poll_for_window(
+        self,
+        manifest: ToolManifest,
+        action_id: str,
+        deadline: float,
+        yield_chords: list[str] | None = None,
+    ) -> None:
         hwnd = find_window(manifest.ipc_title)
         if hwnd is not None:
-            send_action(hwnd, action_id)
+            send_action(hwnd, action_id, yield_chords=yield_chords)
             return
         if time.monotonic() >= deadline:
             return  # tool never opened its IPC window in time; drop the action
         QTimer.singleShot(
             _LAUNCH_POLL_INTERVAL_MS,
-            lambda: self._poll_for_window(manifest, action_id, deadline),
+            lambda: self._poll_for_window(manifest, action_id, deadline, yield_chords),
         )
 
     def shutdown(self) -> None:

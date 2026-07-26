@@ -27,9 +27,27 @@ def find_window(title: str) -> int | None:
     return hwnd or None
 
 
-def send_action(hwnd: int, action_id: str, protocol_version: int = 1) -> bool:
-    """Send an action id to hwnd via WM_COPYDATA. Returns whether the receiver accepted it."""
+def encode_action_payload(action_id: str, yield_chords: list[str] | None = None) -> bytes:
+    """Build the WM_COPYDATA payload bytes: the action id, optionally followed
+    by a second NUL-terminated string listing the chords the host currently
+    has registered (neutral format, space-separated -- see CONTRACT.md's
+    "yield while active" section). A receiver that only reads up to the first
+    NUL sees just the action id, so this is backward-compatible with older
+    clients."""
     payload = action_id.encode("utf-8") + b"\x00"
+    if yield_chords:
+        payload += " ".join(yield_chords).encode("utf-8") + b"\x00"
+    return payload
+
+
+def send_action(
+    hwnd: int,
+    action_id: str,
+    protocol_version: int = 1,
+    yield_chords: list[str] | None = None,
+) -> bool:
+    """Send an action id to hwnd via WM_COPYDATA. Returns whether the receiver accepted it."""
+    payload = encode_action_payload(action_id, yield_chords)
     buf = ctypes.create_string_buffer(payload)
     cds = _COPYDATASTRUCT(
         dwData=protocol_version,

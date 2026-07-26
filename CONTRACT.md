@@ -72,6 +72,29 @@ This is fire-and-forget: the host does not wait for or receive a reply. If a
 tool ever needs to report status back, that is a v2 concern — out of scope
 here.
 
+### Yielding hotkeys while a tool is active
+
+`lpData` MAY carry a **second** NUL-terminated UTF-8 string after the action
+id: a space-separated list of the chords the host currently has registered
+globally, in neutral format (lowercase, `+`-joined, `win` for the Windows/Meta
+key — e.g. `alt+q`, `ctrl+alt+space`). Example: `lpData` for `toggle` with one
+owned chord is `b"toggle\x00alt+q\x00"`, `cbData = 13`.
+
+This exists because `RegisterHotKey` (what the host uses) sits *after* a
+low-level keyboard hook in Windows' input chain — a tool that installs its own
+hook while active (e.g. AutoHotkey's `*`-wildcard hotkeys) can swallow a chord
+before the host's `RegisterHotKey` ever sees it, even though the host, not the
+tool, owns that chord. A tool that wants the host's chords to keep working
+while it's active should, on activation, register each received chord as a
+transparent pass-through in its own hook (AutoHotkey: `~<chord>::return` —
+`~` doesn't consume the key) so it out-ranks any looser wildcard binding on
+the same key, and remove them on deactivation.
+
+A receiver that only parses up to the first NUL sees just the action id and
+is unaffected — this field is purely additive, no version bump. An empty or
+absent second string means the host currently owns no chords (or is an older
+host); the tool should treat that the same as receiving no chords to yield.
+
 ## Manifest — `fasttool.json`
 
 Every palette-managed tool ships a `fasttool.json` file next to its

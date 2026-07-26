@@ -1,0 +1,12 @@
+{
+  "id": "fastkeyboardmouse",
+  "name": "Fast Keyboard Mouse",
+  "ipc_title": "FastToolIPC::fastkeyboardmouse",
+  "launch": {
+    "exe": "FastKeyboardMouse.exe",
+    "args": ["--palette"]
+  },
+  "actions": [
+    { "id": "toggle", "label": "Toggle mouse mode" }
+  ]
+}

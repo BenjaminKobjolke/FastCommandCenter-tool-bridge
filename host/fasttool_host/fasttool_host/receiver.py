@@ -26,8 +26,18 @@ import win32gui
 import winerror
 from PySide6.QtCore import QObject, Signal
 
-from .copydata import SETTINGS_PROTOCOL_VERSION, decode_settings_payload, read_copydata_struct
+from .copydata import (
+    SETTINGS_PROTOCOL_VERSION,
+    TEXT_PROVIDER_PROTOCOL_VERSION,
+    decode_settings_payload,
+    read_copydata_struct,
+)
 from .settings import SettingsError, ToolSettings
+from .text_provider import (
+    TextProviderError,
+    ToolTextProviderActivation,
+    ToolTextResults,
+)
 
 HOST_IPC_TITLE = "FastToolIPC::host"
 
@@ -39,7 +49,7 @@ class _ReceiverWindow:
     fasttool_palette.window._IPCWindow, the client's equivalent for the
     opposite direction."""
 
-    def __init__(self, on_message: Callable[[str, dict[str, Any]], None]) -> None:
+    def __init__(self, on_message: Callable[[int, str, dict[str, Any]], None]) -> None:
         self._on_message = on_message
         wc = win32gui.WNDCLASS()
         # The class-level wndproc is just a DefWindowProc placeholder: a
@@ -76,10 +86,10 @@ class _ReceiverWindow:
             decoded = read_copydata_struct(lparam)
             if decoded is not None:
                 dw_data, raw = decoded
-                if dw_data == SETTINGS_PROTOCOL_VERSION:
+                if dw_data in (SETTINGS_PROTOCOL_VERSION, TEXT_PROVIDER_PROTOCOL_VERSION):
                     envelope = decode_settings_payload(raw)
                     if envelope is not None:
-                        self._on_message(*envelope)
+                        self._on_message(dw_data, *envelope)
             return True
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
@@ -96,6 +106,8 @@ class SettingsReceiver(QObject):
     """
 
     snapshot_received = Signal(ToolSettings)
+    text_results_received = Signal(ToolTextResults)
+    text_provider_activation_requested = Signal(ToolTextProviderActivation)
 
     def __init__(self) -> None:
         super().__init__()
@@ -113,14 +125,17 @@ class SettingsReceiver(QObject):
         self._ready.set()
         win32gui.PumpMessages()
 
-    def _on_message(self, kind: str, body: dict[str, Any]) -> None:
-        if kind != "snapshot":
-            return
+    def _on_message(self, version: int, kind: str, body: dict[str, Any]) -> None:
         try:
-            settings = ToolSettings.from_dict(body)
-        except SettingsError:
+            if version == SETTINGS_PROTOCOL_VERSION and kind == "snapshot":
+                self.snapshot_received.emit(ToolSettings.from_dict(body))
+            elif version == TEXT_PROVIDER_PROTOCOL_VERSION and kind == "results":
+                self.text_results_received.emit(ToolTextResults.from_dict(body))
+            elif version == TEXT_PROVIDER_PROTOCOL_VERSION and kind == "activate_provider":
+                activation = ToolTextProviderActivation.from_dict(body)
+                self.text_provider_activation_requested.emit(activation)
+        except (SettingsError, TextProviderError):
             return
-        self.snapshot_received.emit(settings)
 
     def stop(self) -> None:
         """Stop the background message pump. Safe to call once; the window

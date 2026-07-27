@@ -19,7 +19,13 @@ from typing import Any
 
 from PySide6.QtCore import QProcess, QTimer
 
-from .copydata import find_window, send_action, send_settings
+from .copydata import (
+    TEXT_PROVIDER_PROTOCOL_VERSION,
+    find_window,
+    send_action,
+    send_json,
+    send_settings,
+)
 from .manifest import ToolManifest, discover_manifests
 from .receiver import SettingsReceiver
 
@@ -59,6 +65,10 @@ class ToolBridge:
         # describe -- the signal must already exist to be connectable.
         self._receiver = SettingsReceiver()
         self.settings_received = self._receiver.snapshot_received
+        self.text_results_received = self._receiver.text_results_received
+        self.text_provider_activation_requested = (
+            self._receiver.text_provider_activation_requested
+        )
 
     def load(self, tool_dirs: list[Path]) -> list[ToolAction]:
         self._manifests = {manifest.id: manifest for manifest in discover_manifests(tool_dirs)}
@@ -117,6 +127,29 @@ class ToolBridge:
             return
         body = {"id": setting_id, "value": value}
         self._send_or_launch(manifest, lambda hwnd: send_settings(hwnd, "set", body))
+
+    def query_text(
+        self,
+        tool_id: str,
+        provider_id: str,
+        session_id: str,
+        request_id: str,
+        query: str,
+    ) -> None:
+        """Request live text results from a provider declared by the tool."""
+        manifest = self._manifests.get(tool_id)
+        if manifest is None or provider_id not in {p.id for p in manifest.text_providers}:
+            return
+        body = {
+            "provider_id": provider_id,
+            "session_id": session_id,
+            "request_id": request_id,
+            "query": query,
+        }
+        self._send_or_launch(
+            manifest,
+            lambda hwnd: send_json(hwnd, TEXT_PROVIDER_PROTOCOL_VERSION, "query", body),
+        )
 
     def _send_or_launch(self, manifest: ToolManifest, send: Callable[[int], object]) -> None:
         """Find-or-launch ``manifest``'s tool, then call ``send(hwnd)`` once

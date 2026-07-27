@@ -45,6 +45,24 @@ def test_load_manifest_rejects_mismatched_ipc_title(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+def test_load_manifest_parses_text_providers(tmp_path: Path) -> None:
+    path = write_manifest(
+        tmp_path,
+        {
+            **VALID,
+            "text_providers": [
+                {"id": "suggestions", "label": "FastTextSuggester", "min_chars": 1}
+            ],
+        },
+    )
+
+    manifest = load_manifest(path)
+
+    assert manifest.text_providers[0].id == "suggestions"
+    assert manifest.text_providers[0].label == "FastTextSuggester"
+    assert manifest.text_providers[0].min_chars == 1
+
+
 def test_load_manifest_rejects_missing_field(tmp_path: Path) -> None:
     data = {k: v for k, v in VALID.items() if k != "launch"}
     path = write_manifest(tmp_path, data)
@@ -57,7 +75,7 @@ def test_load_manifest_rejects_empty_actions(tmp_path: Path) -> None:
     data = {**VALID, "actions": []}
     path = write_manifest(tmp_path, data)
 
-    with pytest.raises(ManifestError, match="actions must not be empty"):
+    with pytest.raises(ManifestError, match="must not both be empty"):
         load_manifest(path)
 
 

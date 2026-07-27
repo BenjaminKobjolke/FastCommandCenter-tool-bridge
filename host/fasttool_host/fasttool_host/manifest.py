@@ -28,12 +28,20 @@ class ToolActionDef:
 
 
 @dataclass(frozen=True)
+class ToolTextProviderDef:
+    id: str
+    label: str
+    min_chars: int = 0
+
+
+@dataclass(frozen=True)
 class ToolManifest:
     id: str
     name: str
     ipc_title: str
     launch: ToolLaunch
     actions: tuple[ToolActionDef, ...]
+    text_providers: tuple[ToolTextProviderDef, ...]
     manifest_dir: Path
 
     @property
@@ -53,7 +61,8 @@ def load_manifest(path: Path) -> ToolManifest:
         name = data["name"]
         ipc_title = data["ipc_title"]
         launch_data = data["launch"]
-        actions_data = data["actions"]
+        actions_data = data.get("actions", [])
+        text_providers_data = data.get("text_providers", [])
     except KeyError as exc:
         raise ManifestError(f"{path}: missing required field {exc}") from exc
 
@@ -71,8 +80,20 @@ def load_manifest(path: Path) -> ToolManifest:
     except KeyError as exc:
         raise ManifestError(f"{path}: action missing required field {exc}") from exc
 
-    if not actions:
-        raise ManifestError(f"{path}: actions must not be empty")
+    try:
+        text_providers = tuple(
+            ToolTextProviderDef(
+                id=provider["id"],
+                label=provider["label"],
+                min_chars=int(provider.get("min_chars", 0)),
+            )
+            for provider in text_providers_data
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ManifestError(f"{path}: malformed text provider: {exc}") from exc
+
+    if not actions and not text_providers:
+        raise ManifestError(f"{path}: actions and text_providers must not both be empty")
 
     return ToolManifest(
         id=tool_id,
@@ -80,6 +101,7 @@ def load_manifest(path: Path) -> ToolManifest:
         ipc_title=ipc_title,
         launch=launch,
         actions=actions,
+        text_providers=text_providers,
         manifest_dir=path.parent,
     )
 

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from fasttool_host.bridge import ToolBridge
 
@@ -107,7 +108,7 @@ def test_set_setting_with_unknown_tool_id_is_a_no_op(tmp_path: Path) -> None:
 def test_settings_received_signal_exists_and_is_connectable(tmp_path: Path) -> None:
     bridge = ToolBridge()
 
-    received = []
+    received: list[object] = []
     bridge.settings_received.connect(received.append)  # must not raise
 
 
@@ -116,3 +117,22 @@ def test_shutdown_with_no_launched_processes_stops_the_settings_receiver(tmp_pat
     bridge.load([])
 
     bridge.shutdown()  # must not raise; also tears down the receiver window
+
+
+def test_query_text_sends_only_to_a_declared_provider(tmp_path: Path) -> None:
+    tool_dir = tmp_path / "text"
+    write_manifest(
+        tool_dir,
+        {
+            **VALID,
+            "text_providers": [{"id": "suggestions", "label": "FastTextSuggester"}],
+        },
+    )
+    bridge = ToolBridge()
+    bridge.load([tool_dir])
+
+    with patch.object(bridge, "_send_or_launch") as send:
+        bridge.query_text("fastkeyboardmouse", "suggestions", "s", "r", "hello")
+        bridge.query_text("fastkeyboardmouse", "unknown", "s", "r", "hello")
+
+    send.assert_called_once()

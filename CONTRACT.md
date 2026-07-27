@@ -223,6 +223,8 @@ tool's own native format (e.g. AutoHotkey hotkey syntax):
 | `bool` | `true` / `false` | — |
 | `enum` | string | `choices`: list of strings |
 | `color` | `"#rrggbb"` | — |
+| `string` | string | — |
+| `directory` | directory path string | — |
 
 `shortcut` reuses the **same neutral chord format** already defined above
 under "Yielding hotkeys while a tool is active" (lowercase, `+`-joined,
@@ -258,10 +260,32 @@ and blindly parses `lpData` as an action id would just look up `"describe"`
 or `"set"` in its action map, find nothing, and silently ignore it per the
 existing unknown-action-id rule.
 
+## Text provider protocol (v3)
+
+Tools may declare live text sources alongside fixed actions:
+
+```json
+"text_providers": [
+  {"id": "suggestions", "label": "FastTextSuggester", "min_chars": 0}
+]
+```
+
+`dwData = 3` uses the same `kind\0json\0` envelope as settings v2. The host
+sends `query` with `provider_id`, `session_id`, `request_id`, and `query`.
+The tool replies to `FastToolIPC::host` with `results`, repeating all three
+ids and returning `results: [{"title", "subtitle", "text"}]`. `text` is the
+resolved value the host inserts and may differ from the displayed title.
+
+A tool may send `activate_provider` with its `tool_id` and `provider_id` to
+ask the host to open that provider, for example after asynchronous OCR.
+Unknown providers, malformed bodies, and stale correlation ids are ignored.
+The protocol is optional; v1/v2-only tools are unaffected.
+
 ## Versioning
 
 `dwData` carries a protocol version so a future breaking wire change can be
-detected. Action-fire is version **1**, settings is version **2** (see
+detected. Action-fire is version **1**, settings is version **2**, and text
+providers are version **3** (see
 above) — both are live simultaneously, not a linear upgrade. Receivers should
 ignore messages with an unrecognized `dwData` rather than crash
 (forward-compat is more important than strict validation for a

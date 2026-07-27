@@ -16,7 +16,7 @@ import win32api
 import win32gui
 
 from fasttool_palette.copydata import decode_settings_payload, read_copydata_struct
-from fasttool_palette.window import HOST_IPC_TITLE, FastToolPalette
+from fasttool_palette.window import HOST_IPC_TITLE, FastToolPalette, TextSuggestion
 
 WM_COPYDATA = 0x004A
 _fake_host_class_ids = itertools.count()
@@ -212,3 +212,37 @@ def test_set_with_unknown_setting_id_is_silently_ignored() -> None:
         assert fake_host.received == []
     finally:
         fake_host.close()
+
+
+def test_text_query_runs_registered_provider_during_poll(monkeypatch) -> None:
+    palette = FastToolPalette("test-tool-text-provider")
+    sent = []
+
+    def record_send(hwnd, version, kind, body):
+        sent.append((hwnd, version, kind, body))
+        return True
+
+    monkeypatch.setattr("fasttool_palette.window.find_window", lambda _title: 123)
+    monkeypatch.setattr("fasttool_palette.window.send_json", record_send)
+    palette.add_text_provider(
+        "suggestions",
+        lambda query, session: [TextSuggestion(title=query, text=f"{session}:{query}")],
+    )
+    palette._text_queue.put(
+        (
+            "query",
+            {
+                "provider_id": "suggestions",
+                "session_id": "session-1",
+                "request_id": "request-1",
+                "query": "hello",
+            },
+        )
+    )
+
+    palette.poll()
+
+    assert sent[0][2] == "results"
+    assert sent[0][3]["results"] == [
+        {"title": "hello", "text": "session-1:hello", "subtitle": ""}
+    ]

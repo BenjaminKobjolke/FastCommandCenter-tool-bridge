@@ -22,6 +22,7 @@ from typing import Any
 
 WM_COPYDATA = 0x004A
 SETTINGS_PROTOCOL_VERSION = 2
+TEXT_PROVIDER_PROTOCOL_VERSION = 3
 
 
 class _COPYDATASTRUCT(ctypes.Structure):
@@ -106,10 +107,15 @@ def send_settings(hwnd: int, kind: str, body: dict[str, Any]) -> bool:
     settings protocol -- the host sends ``describe``/``set`` to a tool's
     ``FastToolIPC::<id>`` window with this; a tool's client shim sends
     ``snapshot`` to the host's ``FastToolIPC::host`` window the same way."""
+    return send_json(hwnd, SETTINGS_PROTOCOL_VERSION, kind, body)
+
+
+def send_json(hwnd: int, protocol_version: int, kind: str, body: dict[str, Any]) -> bool:
+    """Send a JSON envelope using the requested protocol version."""
     payload = encode_settings_payload(kind, body)
     buf = ctypes.create_string_buffer(payload)
     cds = _COPYDATASTRUCT(
-        dwData=SETTINGS_PROTOCOL_VERSION,
+        dwData=protocol_version,
         cbData=len(payload),
         lpData=ctypes.cast(buf, ctypes.c_void_p),
     )

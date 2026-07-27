@@ -15,6 +15,9 @@ own OS hotkey. See [`CONTRACT.md`](CONTRACT.md) for the wire protocol.
   loads `fasttool.json` manifests, launches/tracks tools, sends actions.
 - `examples/fasttool.json` — a reference manifest.
 
+Protocol v3 text providers let tools answer live palette queries and return
+resolved insertion text without exposing their data files to the host.
+
 ## Who depends on what
 
 | Consumer | Takes | How |

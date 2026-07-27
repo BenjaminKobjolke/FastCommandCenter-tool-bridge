@@ -27,9 +27,11 @@ import win32gui
 
 from .copydata import (
     SETTINGS_PROTOCOL_VERSION,
+    TEXT_PROVIDER_PROTOCOL_VERSION,
     decode_settings_payload,
     find_window,
     read_copydata_struct,
+    send_json,
     send_settings,
 )
 
@@ -48,6 +50,13 @@ class _SettingDef:
     choices: list[str] | None = None
 
 
+@dataclass(frozen=True)
+class TextSuggestion:
+    title: str
+    text: str
+    subtitle: str = ""
+
+
 class _IPCWindow:
     """A hidden, ordinary top-level window (findable via FindWindow) that
     decodes WM_COPYDATA payloads and hands them to a callback -- an action
@@ -59,9 +68,11 @@ class _IPCWindow:
         title: str,
         on_action: Callable[[str], None],
         on_settings_message: Callable[[str, dict[str, Any]], None],
+        on_text_message: Callable[[str, dict[str, Any]], None],
     ) -> None:
         self._on_action = on_action
         self._on_settings_message = on_settings_message
+        self._on_text_message = on_text_message
         wc = win32gui.WNDCLASS()
         # typeshed marks these properties read-only; PyWNDCLASS is genuinely
         # mutable at runtime — this is the documented way to configure it.
@@ -82,6 +93,10 @@ class _IPCWindow:
                     envelope = decode_settings_payload(raw)
                     if envelope is not None:
                         self._on_settings_message(*envelope)
+                elif dw_data == TEXT_PROVIDER_PROTOCOL_VERSION:
+                    envelope = decode_settings_payload(raw)
+                    if envelope is not None:
+                        self._on_text_message(*envelope)
                 elif raw:
                     self._on_action(raw.split(b"\x00", 1)[0].decode("utf-8"))
             return True
@@ -99,8 +114,12 @@ class FastToolPalette:
         self._tool_id = tool_id
         self._queue: queue.Queue[str] = queue.Queue()
         self._settings_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
+        self._text_queue: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
         self._setting_ids: list[str] = []
         self._setting_defs: dict[str, _SettingDef] = {}
+        self._text_providers: dict[
+            str, Callable[[str, str], list[TextSuggestion]]
+        ] = {}
         self._ready = threading.Event()
         self.hwnd: int | None = None
         self._thread = threading.Thread(
@@ -115,7 +134,10 @@ class FastToolPalette:
         # (kind, body) callback would silently misroute `body` into `block`
         # instead of storing a (kind, body) tuple.
         window = _IPCWindow(
-            title, self._queue.put, lambda kind, body: self._settings_queue.put((kind, body))
+            title,
+            self._queue.put,
+            lambda kind, body: self._settings_queue.put((kind, body)),
+            lambda kind, body: self._text_queue.put((kind, body)),
         )
         self.hwnd = window.hwnd
         self._ready.set()
@@ -136,7 +158,7 @@ class FastToolPalette:
     ) -> None:
         """Expose one of this tool's own settings to the host (CONTRACT.md's
         "Settings protocol (v2)"). `type_` is one of "shortcut"/"int"/
-        "bool"/"enum"/"color". `getter` takes no args and must return the
+        "bool"/"enum"/"color"/"string"/"directory". `getter` takes no args and must return the
         current value already in CONTRACT.md's neutral format (e.g. a
         "shortcut" value like "alt+q"); `setter` takes one value in that
         same neutral format and is responsible for persisting it AND
@@ -157,6 +179,7 @@ class FastToolPalette:
         all synchronously, on the calling thread, before this returns.
         """
         self._drain_settings()
+        self._drain_text_queries()
         actions = []
         while True:
             try:
@@ -164,6 +187,68 @@ class FastToolPalette:
             except queue.Empty:
                 break
         return actions
+
+    def add_text_provider(
+        self,
+        provider_id: str,
+        callback: Callable[[str, str], list[TextSuggestion]],
+    ) -> None:
+        """Register a query callback executed by poll() on the tool thread."""
+        self._text_providers[provider_id] = callback
+
+    def activate_text_provider(self, provider_id: str) -> bool:
+        """Ask the host to open one of this tool's declared text providers."""
+        host_hwnd = find_window(HOST_IPC_TITLE)
+        if host_hwnd is None:
+            return False
+        return send_json(
+            host_hwnd,
+            TEXT_PROVIDER_PROTOCOL_VERSION,
+            "activate_provider",
+            {"tool_id": self._tool_id, "provider_id": provider_id},
+        )
+
+    def _drain_text_queries(self) -> None:
+        while True:
+            try:
+                kind, body = self._text_queue.get_nowait()
+            except queue.Empty:
+                return
+            if kind != "query":
+                continue
+            provider_id = body.get("provider_id")
+            if not isinstance(provider_id, str):
+                continue
+            callback = self._text_providers.get(provider_id)
+            if callback is None:
+                continue
+            session_id = str(body.get("session_id", ""))
+            request_id = str(body.get("request_id", ""))
+            query = str(body.get("query", ""))
+            results = callback(query, session_id)
+            self._send_text_results(provider_id, session_id, request_id, results)
+
+    def _send_text_results(
+        self,
+        provider_id: str,
+        session_id: str,
+        request_id: str,
+        results: list[TextSuggestion],
+    ) -> None:
+        host_hwnd = find_window(HOST_IPC_TITLE)
+        if host_hwnd is None:
+            return
+        body = {
+            "tool_id": self._tool_id,
+            "provider_id": provider_id,
+            "session_id": session_id,
+            "request_id": request_id,
+            "results": [
+                {"title": item.title, "text": item.text, "subtitle": item.subtitle}
+                for item in results
+            ],
+        }
+        send_json(host_hwnd, TEXT_PROVIDER_PROTOCOL_VERSION, "results", body)
 
     def _drain_settings(self) -> None:
         while True:

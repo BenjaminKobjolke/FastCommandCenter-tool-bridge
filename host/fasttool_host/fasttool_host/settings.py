@@ -28,7 +28,7 @@ class ToolSetting:
 
     id: str
     label: str
-    type: str  # "shortcut" | "int" | "bool" | "enum" | "color"
+    type: str  # shortcut | int | bool | enum | color | string | directory
     value: Any
     min: int | None = None
     max: int | None = None
